@@ -41,12 +41,30 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="X-PseudoGram-Signature header missing"
             )
-        if not verify_signature(body, signature):
+        expected_signature = hmac.new(
+            settings.PSEUDOGRAM_API_KEY.encode(),
+            body,
+            hashlib.sha256
+        ).hexdigest()
+
+        received_signature = signature.removeprefix("sha256=")
+
+        logger.info("Received signature: %s", received_signature)
+        logger.info("Expected signature: %s", expected_signature)
+
+        if not hmac.compare_digest(received_signature, expected_signature):
             logger.warning("Invalid signature verification failed")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature"
             )
+        
+        # if not verify_signature(body, signature):
+        #     logger.warning("Invalid signature verification failed")
+        #     raise HTTPException(
+        #         status_code=status.HTTP_401_UNAUTHORIZED,
+        #         detail="Invalid webhook signature"
+        #     )
 
     try:
         payload = json.loads(body)
