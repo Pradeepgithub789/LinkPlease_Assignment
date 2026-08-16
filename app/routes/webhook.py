@@ -3,9 +3,11 @@ import hashlib
 import json
 import logging
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+
 from app.config import settings
 from app.database import get_db
 from app.models import WebhookEvent
@@ -13,58 +15,51 @@ from app.models import WebhookEvent
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 def verify_signature(body: bytes, signature_header: str) -> bool:
-    if not signature_header.startswith("sha256="):
+    if not signature_header or not signature_header.startswith("sha256="):
         return False
-    received_signature = signature_header.split("sha256=")[1]
+
+    received_signature = signature_header.removeprefix("sha256=")
+
     expected_signature = hmac.new(
-        settings.PSEUDOGRAM_API_KEY.encode(),
+        settings.PSEUDOGRAM_API_KEY.encode("utf-8"),
         body,
         hashlib.sha256
     ).hexdigest()
-    return hmac.compare_digest(received_signature, expected_signature)
+
+    return hmac.compare_digest(
+        received_signature,
+        expected_signature
+    )
+
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
-async def receive_webhook(request: Request, db: Session = Depends(get_db)):
+async def receive_webhook(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    # IMPORTANT: get the exact raw request body first
     body = await request.body()
-    key_fingerprint = hashlib.sha256(
-            settings.PSEUDOGRAM_API_KEY.encode()
-    ).hexdigest()
-
-    logger.info("API key fingerprint: %s", key_fingerprint)
 
     if settings.WEBHOOK_SIGNATURE_REQUIRED:
         signature = request.headers.get("X-PseudoGram-Signature")
+
         if not signature:
             logger.warning("Missing signature header")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="X-PseudoGram-Signature header missing"
             )
-        expected_signature = hmac.new(
-            settings.PSEUDOGRAM_API_KEY.encode(),
-            body,
-            hashlib.sha256
-        ).hexdigest()
 
-        received_signature = signature.removeprefix("sha256=")
-
-        logger.info("Received signature: %s", received_signature)
-        logger.info("Expected signature: %s", expected_signature)
-
-        if not hmac.compare_digest(received_signature, expected_signature):
-            logger.warning("Invalid signature verification failed")
+        if not verify_signature(body, signature):
+            logger.warning("Invalid webhook signature")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature"
             )
-        
-        # if not verify_signature(body, signature):
-        #     logger.warning("Invalid signature verification failed")
-        #     raise HTTPException(
-        #         status_code=status.HTTP_401_UNAUTHORIZED,
-        #         detail="Invalid webhook signature"
-        #     )
+
+        logger.info("Webhook signature verified successfully")
 
     try:
         payload = json.loads(body)
@@ -85,19 +80,30 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
             detail="Missing required fields: event_id, event_type, sent_at, data"
         )
 
-    # Convert ISO-8601 string to datetime
     try:
-        sent_at = datetime.fromisoformat(sent_at_str.replace("Z", "+00:00"))
+        sent_at = datetime.fromisoformat(
+            sent_at_str.replace("Z", "+00:00")
+        )
     except ValueError:
         sent_at = datetime.utcnow()
 
-    # Safely extract comment details
     comment_id = data.get("comment_id")
     post_id = data.get("post_id")
     text = data.get("text")
+
     from_user = data.get("from", {})
-    user_id = from_user.get("user_id") if isinstance(from_user, dict) else None
-    username = from_user.get("username") if isinstance(from_user, dict) else None
+
+    user_id = (
+        from_user.get("user_id")
+        if isinstance(from_user, dict)
+        else None
+    )
+
+    username = (
+        from_user.get("username")
+        if isinstance(from_user, dict)
+        else None
+    )
 
     if not comment_id:
         raise HTTPException(
@@ -105,7 +111,6 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
             detail="comment_id is missing from data payload"
         )
 
-    # Insert event with pending status
     db_event = WebhookEvent(
         event_id=event_id,
         event_type=event_type,
@@ -121,9 +126,15 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         db.add(db_event)
         db.commit()
+
     except IntegrityError:
         db.rollback()
-        # Event already exists (event-level deduplication)
-        return {"status": "ignored", "detail": "Duplicate event ID"}
 
-    return {"status": "accepted"}
+        return {
+            "status": "ignored",
+            "detail": "Duplicate event ID"
+        }
+
+    return {
+        "status": "accepted"
+    }
