@@ -25,6 +25,8 @@ class PseudoGramClient:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
                 response = await client.post(url, json=payload, headers=headers)
+                logger.info(f"DM API status: {response.status_code}")
+                logger.info(f"DM API response: {response.text}")
                 data = {}
                 try:
                     data = response.json()
