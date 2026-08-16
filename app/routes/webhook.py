@@ -1,3 +1,4 @@
+import base64
 import hmac
 import hashlib
 import json
@@ -16,6 +17,26 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def get_signing_secret(api_key: str) -> str:
+    cleaned_key = api_key.strip().strip('"').strip("'")
+    
+    # The live PseudoGram simulator signs webhooks using the base64-decoded email component
+    # of the developer's API key format (<base64_email>.<hex_suffix>).
+    # If the key contains a dot, we decode the base64 prefix as the secret.
+    if "." in cleaned_key:
+        b64_part = cleaned_key.split(".")[0]
+        # Pad the base64 string if necessary
+        padding = len(b64_part) % 4
+        if padding:
+            b64_part += "=" * (4 - padding)
+        try:
+            return base64.b64decode(b64_part).decode("utf-8")
+        except Exception:
+            pass
+            
+    return cleaned_key
+
+
 def verify_signature(body: bytes, signature_header: str) -> bool:
     if not signature_header:
         return False
@@ -26,9 +47,9 @@ def verify_signature(body: bytes, signature_header: str) -> bool:
     else:
         received_signature = sig_header
 
-    cleaned_key = settings.PSEUDOGRAM_API_KEY.strip().strip('"').strip("'")
+    secret = get_signing_secret(settings.PSEUDOGRAM_API_KEY)
     expected_signature = hmac.new(
-        cleaned_key.encode("utf-8"),
+        secret.encode("utf-8"),
         body,
         hashlib.sha256
     ).hexdigest()
@@ -53,11 +74,10 @@ async def receive_webhook(
 ):
     # IMPORTANT: get the exact raw request body first
     body = await request.body()
-    logger.info("RAW BODY TEXT: %s", body.decode("utf-8"))
 
     # Safe diagnostic logging
-    cleaned_key = settings.PSEUDOGRAM_API_KEY.strip().strip('"').strip("'")
-    key_fingerprint = hashlib.sha256(cleaned_key.encode("utf-8")).hexdigest()
+    secret = get_signing_secret(settings.PSEUDOGRAM_API_KEY)
+    key_fingerprint = hashlib.sha256(secret.encode("utf-8")).hexdigest()
     body_len = len(body)
     body_sha256 = hashlib.sha256(body).hexdigest()
     content_type = request.headers.get("Content-Type", "")
@@ -79,7 +99,7 @@ async def receive_webhook(
             received_sig = sig_header
         
         expected_sig = hmac.new(
-            cleaned_key.encode("utf-8"),
+            secret.encode("utf-8"),
             body,
             hashlib.sha256
         ).hexdigest()
