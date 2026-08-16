@@ -17,21 +17,33 @@ logger = logging.getLogger(__name__)
 
 
 def verify_signature(body: bytes, signature_header: str) -> bool:
-    if not signature_header or not signature_header.startswith("sha256="):
+    if not signature_header:
         return False
 
-    received_signature = signature_header.removeprefix("sha256=")
+    sig_header = signature_header.strip()
+    if sig_header.lower().startswith("sha256="):
+        received_signature = sig_header[7:].strip()
+    else:
+        received_signature = sig_header
 
+    cleaned_key = settings.PSEUDOGRAM_API_KEY.strip().strip('"').strip("'")
     expected_signature = hmac.new(
-        settings.PSEUDOGRAM_API_KEY.encode("utf-8"),
+        cleaned_key.encode("utf-8"),
         body,
         hashlib.sha256
     ).hexdigest()
 
-    return hmac.compare_digest(
+    verified = hmac.compare_digest(
         received_signature,
         expected_signature
     )
+    
+    if verified:
+        logger.info("Webhook signature verified successfully")
+    else:
+        logger.warning("Webhook signature verification failed")
+        
+    return verified
 
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
@@ -42,9 +54,38 @@ async def receive_webhook(
     # IMPORTANT: get the exact raw request body first
     body = await request.body()
 
-    if settings.WEBHOOK_SIGNATURE_REQUIRED:
-        signature = request.headers.get("X-PseudoGram-Signature")
+    # Safe diagnostic logging
+    cleaned_key = settings.PSEUDOGRAM_API_KEY.strip().strip('"').strip("'")
+    key_fingerprint = hashlib.sha256(cleaned_key.encode("utf-8")).hexdigest()
+    body_len = len(body)
+    body_sha256 = hashlib.sha256(body).hexdigest()
+    content_type = request.headers.get("Content-Type", "")
+    signature = request.headers.get("X-PseudoGram-Signature")
+    signature_header_present = signature is not None
 
+    logger.info("--- Webhook Request Received ---")
+    logger.info("API key fingerprint: %s", key_fingerprint)
+    logger.info("Raw body length: %d", body_len)
+    logger.info("Raw body SHA256: %s", body_sha256)
+    logger.info("Request Content-Type: %s", content_type)
+    logger.info("X-PseudoGram-Signature header present: %s", signature_header_present)
+
+    if signature_header_present:
+        sig_header = signature.strip()
+        if sig_header.lower().startswith("sha256="):
+            received_sig = sig_header[7:].strip()
+        else:
+            received_sig = sig_header
+        
+        expected_sig = hmac.new(
+            cleaned_key.encode("utf-8"),
+            body,
+            hashlib.sha256
+        ).hexdigest()
+        logger.info("Received signature: %s", received_sig)
+        logger.info("Expected signature: %s", expected_sig)
+
+    if settings.WEBHOOK_SIGNATURE_REQUIRED:
         if not signature:
             logger.warning("Missing signature header")
             raise HTTPException(
