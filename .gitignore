@@ -1,0 +1,27 @@
+# Python envs and virtualenv
+venv/
+.venv/
+env/
+ENV/
+*.pyc
+__pycache__/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases (SQLite databases and transaction logs)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+test_linkplease.db
+linkplease.db
+
+# Configuration/Secrets
+.env
+
+# IDE settings
+.vscode/
+.idea/
