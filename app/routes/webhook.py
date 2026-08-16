@@ -53,6 +53,7 @@ async def receive_webhook(
 ):
     # IMPORTANT: get the exact raw request body first
     body = await request.body()
+    logger.info("RAW BODY TEXT: %s", body.decode("utf-8"))
 
     # Safe diagnostic logging
     cleaned_key = settings.PSEUDOGRAM_API_KEY.strip().strip('"').strip("'")
