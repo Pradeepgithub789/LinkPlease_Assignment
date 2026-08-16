@@ -41,10 +41,15 @@ async def process_queued_jobs():
 
     for job in jobs:
         # Step 1: Atomic Rate Limit Reservation
-        # We start an exclusive SQLite transaction using BEGIN IMMEDIATE to prevent race conditions.
         db = SessionLocal()
         try:
-            db.execute(text("BEGIN IMMEDIATE"))
+            if db.bind.dialect.name == "sqlite":
+                # We start an exclusive SQLite transaction using BEGIN IMMEDIATE to prevent race conditions.
+                db.execute(text("BEGIN IMMEDIATE"))
+            else:
+                # PostgreSQL advisory lock (transaction-level, automatically released on commit/rollback)
+                # We use a constant lock key (e.g., 1337) to serialize rate-limit checks across workers.
+                db.execute(text("SELECT pg_advisory_xact_lock(1337)"))
             
             cutoff = datetime.utcnow() - timedelta(seconds=settings.RATE_LIMIT_WINDOW_SECONDS)
             # Count how many attempts we've made in the last 60 seconds

@@ -54,7 +54,7 @@ The service utilizes a **FastAPI** web server combined with an asynchronous, dat
 ## 3. Technology Stack
 - **Runtime**: Python 3.11+
 - **Framework**: FastAPI (asyncio)
-- **Database**: SQLite (configured for Write-Ahead Logging (WAL) and exclusive locking)
+- **Database**: SQLite (local development and tests) & PostgreSQL (production)
 - **ORM**: SQLAlchemy 2.0
 - **HTTP Client**: httpx (async HTTP requests)
 - **Validation**: Pydantic v2
@@ -178,14 +178,16 @@ Six tables are implemented inside SQLite:
 
 ### Duplicate Handling (Idempotency)
 - **Event-Level Deduplication**: The `webhook_events` table enforces a primary key constraint on `event_id`. Duplicate incoming webhook events fail database insertion and are immediately ignored.
-- **Business-Level Deduplication**: Enforces that a user never receives the same rule twice. A SQLite partial unique index is declared on `dm_jobs(user_id, rule_id) WHERE status IN ('queued', 'sending', 'sent_queued', 'delivered')`.
+- **Business-Level Deduplication**: Enforces that a user never receives the same rule twice. A database-level partial unique index (supporting both SQLite and PostgreSQL) is declared on `dm_jobs(user_id, rule_id) WHERE status IN ('queued', 'sending', 'sent_queued', 'delivered')`.
   - This allows future valid comments to generate DMs if a prior job was `'cancelled'` or `'failed'`, while preventing race conditions from creating concurrent duplicate sends.
   - If a user/rule uniqueness violation is caught, a row is inserted in `duplicates_blocked_events` to track stats.
 
 ### Rate Limiting Strategy
 - The PseudoGram API allows a maximum of **10 requests per rolling 60 seconds**.
-- The `dm_worker` executes within an exclusive database transaction using SQLite's `BEGIN IMMEDIATE` lock.
-- It queries the `dm_attempts_log` table for attempts in the last 60 seconds. If count >= 10, it calculates the necessary sleep duration to clear the oldest log entry and rolls back. This check and slot reservation are completely atomic.
+- The `dm_worker` executes within an atomic rate-limiting reservation block:
+  - For **SQLite**: It starts an exclusive write transaction using `BEGIN IMMEDIATE`.
+  - For **PostgreSQL**: It obtains a transaction-level advisory lock using `SELECT pg_advisory_xact_lock(1337)`.
+- It queries the `dm_attempts_log` table for attempts in the last 60 seconds. If count >= 10, it calculates the necessary sleep duration to clear the oldest log entry, rolls back the transaction (which automatically releases the lock), and sleeps. This check and slot reservation are completely atomic and safe across concurrent workers.
 
 ### Retry Policy
 - **HTTP 500 / Network Timeout**: Job is retried using exponential backoff (`2 ** attempts` seconds). If attempts reach `MAX_DM_ATTEMPTS` (5), the job is marked `'failed'`.
@@ -226,12 +228,25 @@ python -m pytest -s tests/test_simulation.py
 
 ## 10. Deployment Instructions (Render)
 
-1. Create a new **Web Service** on Render.
-2. Connect your Git repository.
-3. Configure the environment:
+To deploy the service completely free on Render using Render Free PostgreSQL (since Render Free Web Services have an ephemeral filesystem and do not support persistent disks):
+
+### Step 1: Create a Render PostgreSQL Database
+1. Go to your Render Dashboard and click **New** -> **PostgreSQL**.
+2. Set a name for the database (e.g., `linkplease-db`).
+3. Select the **Free** tier.
+4. Click **Create Database**.
+5. Once created, copy the **Internal Database URL** (if the web service is in the same Render region) or the **External Database URL** (for external connections).
+
+### Step 2: Create the Web Service
+1. In the Render Dashboard, click **New** -> **Web Service**.
+2. Connect your GitHub repository.
+3. Set the following configuration:
+   - **Name**: `linkplease-api`
    - **Runtime**: `Docker`
-   - **Plan**: Free or Starter
-4. Add the following **Environment Variables** in the Render Dashboard:
-   - `PSEUDOGRAM_API_KEY` = `<your_key>`
-   - `DATABASE_URL` = `sqlite:///./data/linkplease.db` (Use a persistent disk mount path to survive restarts)
-5. If using SQLite, add a **Disk Mount** to `/app/data` to ensure the database file is persistent.
+   - **Plan**: `Free`
+4. Add the following **Environment Variables** in the Web Service configuration:
+   - `PSEUDOGRAM_API_KEY`: `<your_pseudogram_api_key>`
+   - `PSEUDOGRAM_BASE_URL`: `https://pseudogram-api.onrender.com`
+   - `DATABASE_URL`: `<your_copied_postgres_database_url>` (Paste the connection URL copied in Step 1. SQLAlchemy will automatically normalize it if it starts with `postgres://` to `postgresql://`)
+   - `WEBHOOK_SIGNATURE_REQUIRED`: `true`
+5. Click **Deploy Web Service**. Render will build the Docker container and start the web server. The database tables will be automatically initialized at startup.

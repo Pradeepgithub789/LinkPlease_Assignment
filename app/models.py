@@ -49,7 +49,8 @@ class DMJob(Base):
             "user_id",
             "rule_id",
             unique=True,
-            sqlite_where=text("status IN ('queued', 'sending', 'sent_queued', 'delivered')")
+            sqlite_where=text("status IN ('queued', 'sending', 'sent_queued', 'delivered')"),
+            postgresql_where=text("status IN ('queued', 'sending', 'sent_queued', 'delivered')")
         ),
     )
 
