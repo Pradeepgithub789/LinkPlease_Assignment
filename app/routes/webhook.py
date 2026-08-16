@@ -27,6 +27,11 @@ def verify_signature(body: bytes, signature_header: str) -> bool:
 @router.post("/webhook", status_code=status.HTTP_200_OK)
 async def receive_webhook(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
+    key_fingerprint = hashlib.sha256(
+            settings.PSEUDOGRAM_API_KEY.encode()
+    ).hexdigest()
+
+    logger.info("API key fingerprint: %s", key_fingerprint)
 
     if settings.WEBHOOK_SIGNATURE_REQUIRED:
         signature = request.headers.get("X-PseudoGram-Signature")
