@@ -138,7 +138,7 @@ async def process_queued_jobs():
                 db.commit()
                 continue
 
-            if status_code == 202:
+            if status_code in (200, 202):
                 # Accepted -> Transition to sent_queued and wait for reconciliation polling
                 db_job.status = "sent_queued"
                 db_job.dm_id = data.get("dm_id")
